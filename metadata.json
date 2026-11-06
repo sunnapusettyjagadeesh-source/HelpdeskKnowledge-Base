@@ -1,0 +1,6 @@
+{
+  "name": "HelpdeskKnowledge Base",
+  "description": "Searchable support knowledge base with intelligent feedback-driven review surfacing, categories, and fast solution delivery for support teams.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

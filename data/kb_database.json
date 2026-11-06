@@ -1,0 +1,598 @@
+{
+  "articles": [
+    {
+      "id": "art-saml-sso-certs",
+      "title": "Resolving SAML 2.0 Single Sign-On (SSO) 'Invalid Signature' and Certificate Mismatch Errors",
+      "slug": "resolving-saml-20-sso-invalid-signature",
+      "summary": "Step-by-step fix when Okta, Azure AD, or Google Workspace users receive AADB20002 signature validation failures upon signing in.",
+      "categoryId": "cat-security",
+      "categoryName": "Security & Access",
+      "content": "Enterprise customers frequently encounter SAML signature verification failures when their Identity Provider (IdP) rotates its signing certificate or when the local Service Provider (SP) metadata becomes desynchronized.\n\n### Root Causes\n1. **Certificate Renewal Without SP Update**: The IdP rotated its primary signing certificate, but the public X.509 cert in Helpdesk was not refreshed.\n2. **Clock Skew Drift**: Server time difference between IdP and our auth gateway exceeds the allowed 300-second tolerance window.\n3. **Canonicalization Algorithm Mismatch**: IdP uses `Exclusive XML Canonicalization` with comments, whereas SP configuration expects comments to be stripped.",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Inspect the SAML Response Payload",
+          "instructions": "Have the user capture the SAML assertion using the SAML-tracer browser extension or view the raw XML in Admin > Audit Logs > Auth Failures.",
+          "codeSnippet": "// Example error in audit trace:\nStatusMessage: \"Signature cryptographic verification failed against current active cert fingerprint 4A:91:...\""
+        },
+        {
+          "stepNumber": 2,
+          "title": "Export the Clean X.509 Certificate from Identity Provider",
+          "instructions": "In Okta / Azure AD / PingIdentity, download the active Signing Certificate in Base64 (.cer or .pem). Ensure standard 64-character line wraps.",
+          "cautionNotice": "Do not upload the Certificate Signing Request (CSR) by mistake. Only public certs beginning with -----BEGIN CERTIFICATE----- are valid."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Upload Cert & Verify NTP Synchronization",
+          "instructions": "Navigate to Organization Settings > Security > SAML 2.0 Configuration. Paste the new certificate block. Test with an incognito browser session.",
+          "codeSnippet": "curl -v \"https://auth.company.internal/saml/metadata/sp\" -H \"Accept: application/xml\""
+        }
+      ],
+      "quickSnippet": "Hi {{ticket.requester.first_name}},\n\nThis error occurs when the SAML signing certificate in your Identity Provider (Okta/Azure AD) was rotated without synchronizing the public key in your Helpdesk settings.\n\nTo resolve:\n1. Log in to your IdP console and export your active Base-64 X.509 signing certificate (.pem).\n2. As an Owner, open Helpdesk Settings > Security > SAML 2.0.\n3. Replace the existing certificate string with the renewed certificate and click Save.\n4. If testing continues to fail, check that your IdP system clock is synchronized via NTP (drift must be < 5 min).\n\nLet us know if you would like us to verify your metadata XML endpoint directly!",
+      "keywords": [
+        "saml",
+        "okta",
+        "azure ad",
+        "sso",
+        "single sign on",
+        "certificate",
+        "signature validation",
+        "idp",
+        "sp"
+      ],
+      "tags": [
+        "sso",
+        "security",
+        "enterprise",
+        "okta"
+      ],
+      "targetAudience": "public_and_agents",
+      "author": "Elena Rostova (Lead SecOps Engineer)",
+      "reviewStatus": "verified",
+      "lastReviewedAt": "2026-10-15T09:00:00Z",
+      "viewsCount": 342,
+      "helpfulCount": 29,
+      "notHelpfulCount": 2,
+      "outdatedReportsCount": 0,
+      "createdAt": "2026-05-10T12:00:00Z",
+      "updatedAt": "2026-10-15T09:00:00Z",
+      "helpfulRatio": 0.94,
+      "healthScore": 100,
+      "updateUrgency": "healthy",
+      "urgencyReasons": []
+    },
+    {
+      "id": "art-webhook-timeouts-dlq",
+      "title": "Troubleshooting Webhook 504 Gateway Timeouts & Dead-Letter Queue (DLQ) Auto-Disablement",
+      "slug": "troubleshooting-webhook-504-gateway-timeouts-dlq",
+      "summary": "Solutions for customer endpoints taking > 5,000ms to respond, resulting in automatic webhook suspension and retry backoff strategies.",
+      "categoryId": "cat-integrations",
+      "categoryName": "Integrations & Webhooks",
+      "content": "When a customer's destination server takes longer than 5 seconds to process incoming webhook events, our delivery engine records an HTTP 504 Timeout. After 10 consecutive delivery failures within an hour, the webhook endpoint is automatically disabled to protect both servers.\n\n### Crucial Architectural Guideline\nCustomer webhook receivers should **never** perform heavy synchronous database transactions, AI generations, or external API calls before acknowledging receipt. They must return an immediate `HTTP 200 OK` or `HTTP 202 Accepted` within 500ms, queuing the payload into Redis/RabbitMQ/Kafka for async consumption.",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Check Failure Logs in Webhook Inspector",
+          "instructions": "Open Developer Settings > Webhooks > select the endpoint > Delivery Logs. Filter by status 504 or 502."
+        },
+        {
+          "stepNumber": 2,
+          "title": "Implement Async Acknowledgment Architecture",
+          "instructions": "Update the receiver controller to respond immediately before starting background work.",
+          "codeSnippet": "// Node.js Express Example:\napp.post('/api/webhooks/incoming', (req, res) => {\n  // 1. Verify HMAC SHA256 signature\n  const signature = req.headers['x-webhook-signature'];\n  if (!verifySignature(req.body, signature)) return res.status(401).send();\n\n  // 2. Acknowledge IMMEDIATELY\n  res.status(202).json({ received: true });\n\n  // 3. Queue task asynchronously\n  taskQueue.push({ event: req.body });\n});"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Trigger Dead-Letter Queue (DLQ) Re-delivery",
+          "instructions": "Once the receiver is updated, click \"Replay Failed Deliveries\" in the webhook inspector. The system will dispatch pending events with header `X-Delivery-Attempt: 2+`."
+        }
+      ],
+      "quickSnippet": "Hi {{ticket.requester.first_name}},\n\nYour webhook endpoint was paused because our delivery engine received repeated HTTP 504 Gateway Timeouts (latency exceeded our 5,000ms limit).\n\nTo fix this:\n1. Ensure your endpoint responds with `HTTP 200 OK` or `202 Accepted` within 500ms, and moves heavy database processing into a background queue (e.g., BullMQ or Celery).\n2. Re-enable the endpoint in Settings > Developer > Webhooks by clicking \"Re-activate\".\n3. Click \"Replay Failed Events\" to catch up on the missed events stored in your 7-day replay log.",
+      "keywords": [
+        "webhook",
+        "504 timeout",
+        "dlq",
+        "dead letter queue",
+        "delivery failure",
+        "latency",
+        "hmac signature"
+      ],
+      "tags": [
+        "webhooks",
+        "developer",
+        "integrations",
+        "high-priority"
+      ],
+      "targetAudience": "public_and_agents",
+      "author": "Marcus Vance (API Reliability)",
+      "reviewStatus": "needs_review",
+      "lastReviewedAt": "2026-06-20T10:00:00Z",
+      "viewsCount": 512,
+      "helpfulCount": 14,
+      "notHelpfulCount": 11,
+      "outdatedReportsCount": 3,
+      "createdAt": "2026-03-01T10:00:00Z",
+      "updatedAt": "2026-06-20T10:00:00Z",
+      "helpfulRatio": 0.56,
+      "healthScore": 0,
+      "updateUrgency": "urgent",
+      "urgencyReasons": [
+        "Low helpfulness rating (56%) based on 25 reviews",
+        "3 support agents flagged outdated UI steps or commands",
+        "Not reviewed for 138 days (policy threshold: 90 days)"
+      ]
+    },
+    {
+      "id": "art-prorated-billing-refunds",
+      "title": "Handling Pro-Rated Plan Downgrades, Mid-Cycle Seats, and Refund Policy Exceptions",
+      "slug": "handling-prorated-plan-downgrades-refunds",
+      "summary": "Standard response templates, Stripe billing ledger credit rules, and escalation paths for customers demanding direct card refunds after mid-cycle changes.",
+      "categoryId": "cat-billing",
+      "categoryName": "Billing & Subscriptions",
+      "content": "When customers remove seats or downgrade tiers midway through a billing cycle, the system applies **pro-rated account credits** rather than automatic payment card reversals.\n\n### Official Refund Policy Summary\n- **Monthly Plans**: Cancellation takes effect at the end of current cycle; mid-cycle seat decreases generate credit balances for subsequent months.\n- **Annual Contracts**: Non-refundable as per Section 4.2 of Master Service Agreement, unless escalated within 14 days of initial contract execution.\n- **Exceptions Requiring Tier 2 Approval**: Double charge due to bank retry or documented service outage exceeding SLA commitment.",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify Stripe Customer Balance Ledger",
+          "instructions": "Open Admin Billing Panel > Customers > Search Stripe ID. Look at \"Unapplied Credits\". Verify the exact credit amount calculated by Stripe."
+        },
+        {
+          "stepNumber": 2,
+          "title": "Check Eligibility for Card Refund Escalation",
+          "instructions": "If customer requests card refund instead of invoice credit: Check if account was created within 14 days or if there was an administrative error.",
+          "cautionNotice": "Support agents may only approve direct card refunds up to $150. Amounts above $150 require Team Lead sign-off."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Apply the Response Template and Link Account Credit",
+          "instructions": "Send the structured explanation detailing exact dates, unconsumed days, and where they can view the credit balance on their billing page."
+        }
+      ],
+      "quickSnippet": "Hello {{ticket.requester.first_name}},\n\nThank you for reaching out regarding your recent plan change. \n\nWhen seats or tiers are changed mid-cycle, our billing engine automatically calculates the unused time on your previous billing period and issues a pro-rated account credit ($XX.XX) directly to your balance. \n\nThis balance will automatically apply toward your upcoming invoices, so you won't be charged until the credit is fully drawn down. You can review your real-time balance anytime under Settings > Billing > Invoices.\n\nIf you specifically require this credited back to your original payment card instead, please confirm and our billing team will process the reversal.",
+      "keywords": [
+        "billing",
+        "refund",
+        "prorated",
+        "stripe",
+        "invoice",
+        "downgrade",
+        "seats",
+        "cancellation",
+        "credit"
+      ],
+      "tags": [
+        "billing",
+        "payments",
+        "templates",
+        "customer-service"
+      ],
+      "targetAudience": "agents_only",
+      "author": "Sarah Chen (Billing Operations)",
+      "reviewStatus": "verified",
+      "lastReviewedAt": "2026-10-02T14:30:00Z",
+      "viewsCount": 780,
+      "helpfulCount": 65,
+      "notHelpfulCount": 3,
+      "outdatedReportsCount": 0,
+      "createdAt": "2026-01-15T08:00:00Z",
+      "updatedAt": "2026-10-02T14:30:00Z",
+      "helpfulRatio": 0.96,
+      "healthScore": 100,
+      "updateUrgency": "healthy",
+      "urgencyReasons": []
+    },
+    {
+      "id": "art-api-rate-limit-429",
+      "title": "API 429 \"Too Many Requests\": Rate Limit Windows, Token Bucket Throttling & Exponential Backoff",
+      "slug": "api-rate-limit-429-handling",
+      "summary": "Technical guide on handling HTTP 429 responses, parsing Retry-After headers, and optimizing cron integrations with batch queries.",
+      "categoryId": "cat-api",
+      "categoryName": "Developer API & SDKs",
+      "content": "All REST API endpoints are governed by a token-bucket rate limiter.\n- Standard Plan: 120 requests / minute\n- Pro Plan: 600 requests / minute\n- Enterprise: 2,500 requests / minute with dedicated burst allowance.\n\nWhen exceeded, the gateway returns HTTP 429 with header `Retry-After: <seconds>`.",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Parse Rate-Limit Response Headers",
+          "instructions": "Instruct developer to inspect HTTP headers returned on every API call.",
+          "codeSnippet": "X-RateLimit-Limit: 600\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 1731002400\nRetry-After: 14"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Implement Jittered Exponential Backoff",
+          "instructions": "Do not retry on a fixed interval; use randomized exponential backoff to avoid synchronization stampedes.",
+          "codeSnippet": "async function fetchWithRetry(url, options, retries = 3) {\n  try {\n    const res = await fetch(url, options);\n    if (res.status === 429 && retries > 0) {\n      const waitTime = parseInt(res.headers.get('Retry-After') || '2', 10) * 1000;\n      const jitter = Math.random() * 500;\n      await new Promise(r => setTimeout(r, waitTime + jitter));\n      return fetchWithRetry(url, options, retries - 1);\n    }\n    return res;\n  } catch (err) {\n    throw err;\n  }\n}"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Recommend Batch Endpoints",
+          "instructions": "Replace individual item loops with our batch fetching endpoints: `GET /v2/tickets?ids=1,2,3...100` which cost only 1 rate limit point for up to 100 items."
+        }
+      ],
+      "quickSnippet": "Hi {{ticket.requester.first_name}},\n\nYou are hitting our rate limiting threshold (HTTP 429 Too Many Requests).\n\nTo prevent this:\n1. Check the `Retry-After` header in the 429 response, which specifies the exact number of seconds to pause before sending your next request.\n2. Implement randomized exponential backoff in your HTTP client.\n3. Use our batch endpoint `/v2/tickets?ids=...` to fetch up to 100 records in a single API call instead of looping individual requests.\n\nLet us know if your use case requires a temporary rate limit expansion for a data migration!",
+      "keywords": [
+        "rate limit",
+        "429",
+        "retry-after",
+        "exponential backoff",
+        "api",
+        "token bucket",
+        "concurrency"
+      ],
+      "tags": [
+        "api",
+        "developer",
+        "performance"
+      ],
+      "targetAudience": "developers",
+      "author": "Alexandre Dubois (Platform Architect)",
+      "reviewStatus": "verified",
+      "lastReviewedAt": "2026-09-18T11:00:00Z",
+      "viewsCount": 420,
+      "helpfulCount": 38,
+      "notHelpfulCount": 2,
+      "outdatedReportsCount": 0,
+      "createdAt": "2026-04-12T16:00:00Z",
+      "updatedAt": "2026-09-18T11:00:00Z",
+      "helpfulRatio": 0.95,
+      "healthScore": 100,
+      "updateUrgency": "healthy",
+      "urgencyReasons": []
+    },
+    {
+      "id": "art-emergency-2fa-reset",
+      "title": "Emergency 2FA Reset Protocol for Locked-Out Workspace Administrators",
+      "slug": "emergency-2fa-reset-protocol-admins",
+      "summary": "High-security identity verification procedure, cooldown hold periods, and DNS challenge authorization to restore locked-out primary account owners.",
+      "categoryId": "cat-security",
+      "categoryName": "Security & Access",
+      "content": "When a primary Workspace Owner loses their TOTP authenticator device and cannot locate emergency backup recovery codes, account takeover risk is at its highest. \n\nSupport staff must **strictly adhere** to this multi-factor identity verification checklist before initiating a manual 2FA bypass. **Under no circumstances should 2FA be removed based on an incoming email alone.**",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Verify Domain Ownership via DNS TXT Record Challenge",
+          "instructions": "Generate a unique cryptographic verification token in Admin Console > Security Challenges. Ask the requester to publish a TXT record to their company apex domain: `helpdesk-verification=<token>`.",
+          "codeSnippet": "// Verify via command line:\ndig TXT yourcompany.com +short"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Secondary Payment Card Verification",
+          "instructions": "Match the last 4 digits and expiration date of the primary billing card on file, or confirm the exact amount of the last 2 subscription invoices."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Initiate 24-Hour Security Hold & Automated Notification",
+          "instructions": "Trigger the \"Security Cooldown\" action in the admin tool. An automated emergency email is dispatched to all Org Admins and registered billing contacts. If no dispute is raised within 24 hours, the bypass link unlocks.",
+          "cautionNotice": "Never waive the 24-hour security hold without written C-Level or VP Security sign-off."
+        }
+      ],
+      "quickSnippet": "Hi {{ticket.requester.first_name}},\n\nTo protect your organization's sensitive data, our security policy prohibits manual two-factor authentication resets without verified domain ownership.\n\nTo verify your identity as the workspace owner:\n1. We have generated a unique verification token for your domain:\n   Record Type: TXT\n   Host: @ (or root domain)\n   Value: helpdesk-verification-{{security.token}}\n\n2. Reply to this ticket once the DNS record has been published.\n3. Once verified, we will initiate the mandatory 24-hour security cooldown notification to your billing contacts before resetting your authenticator device.\n\nThank you for your patience as we ensure the security of your account.",
+      "keywords": [
+        "2fa",
+        "mfa",
+        "locked out",
+        "two factor",
+        "authenticator",
+        "recovery codes",
+        "dns challenge",
+        "security"
+      ],
+      "tags": [
+        "security",
+        "critical",
+        "admin-only",
+        "identity-verification"
+      ],
+      "targetAudience": "agents_only",
+      "author": "Elena Rostova (Lead SecOps Engineer)",
+      "reviewStatus": "verified",
+      "lastReviewedAt": "2026-10-28T10:15:00Z",
+      "viewsCount": 615,
+      "helpfulCount": 52,
+      "notHelpfulCount": 1,
+      "outdatedReportsCount": 0,
+      "createdAt": "2026-02-14T11:00:00Z",
+      "updatedAt": "2026-10-28T10:15:00Z",
+      "helpfulRatio": 0.98,
+      "healthScore": 100,
+      "updateUrgency": "healthy",
+      "urgencyReasons": []
+    },
+    {
+      "id": "art-email-spf-dkim-dmarc",
+      "title": "Troubleshooting Email Deliverability: SPF, DKIM 2048-bit Keys & DMARC Alignment Failures",
+      "slug": "troubleshooting-email-deliverability-spf-dkim-dmarc",
+      "summary": "Fixing customer notification emails landing in spam folders; updating DNS TXT syntax, selector alignment, and anti-spoofing policies.",
+      "categoryId": "cat-deliverability",
+      "categoryName": "Email & Deliverability",
+      "content": "Since Google and Yahoo enforced strict bulk sender requirements, outgoing notifications from custom sending domains will be rejected with SMTP error 550 5.7.26 if SPF or DKIM fails alignment with DMARC.\n\n### Common Misconfigurations\n1. **Multiple SPF Records**: Having more than one TXT record starting with `v=spf1` violates RFC 7208 and invalidates all SPF evaluations.\n2. **Exceeded 10 DNS Lookups**: Complex SPF chains with nested includes exceed the 10-lookup limit.\n3. **DKIM Selector Typo**: Domain registrar added the domain name twice (e.g. `mail._domainkey.company.com.company.com`).",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Run Diagnostic Header Inspection",
+          "instructions": "Instruct customer to send a test email to our delivery auditor or inspect raw email headers (`Authentication-Results`).",
+          "codeSnippet": "Authentication-Results: mx.google.com;\n       dkim=neutral (bad signature) header.i=@company.com;\n       spf=pass (google.com: domain of support@company.com designates ...) smtp.mailfrom=...;\n       dmarc=fail (p=QUARANTINE sp=QUARANTINE dis=QUARANTINE)"
+        },
+        {
+          "stepNumber": 2,
+          "title": "Consolidate Single SPF Record",
+          "instructions": "Merge all services into a single clean TXT record. Include `include:mailgun.org` or our designated relay.",
+          "codeSnippet": "v=spf1 include:_spf.google.com include:relay.helpdesk.com ~all"
+        },
+        {
+          "stepNumber": 3,
+          "title": "Verify DMARC Alignment and RUA Reporting",
+          "instructions": "Ensure the \"From\" address domain matches the DKIM signing domain (aligned identifier). Add `p=none` while testing before ramping to `p=quarantine`."
+        }
+      ],
+      "quickSnippet": "Hello {{ticket.requester.first_name}},\n\nBased on the message headers provided, your emails are landing in spam because of a DMARC alignment failure on your domain DNS.\n\nPlease check these 2 items with your DNS administrator:\n1. Consolidate your SPF records: You currently have multiple TXT records starting with 'v=spf1'. Combine them into a single record containing 'include:relay.helpdesk.com'.\n2. Verify your DKIM CNAME: Ensure the selector record 'helpdesk._domainkey.yourdomain.com' points to 'dkim.helpdesk.com' and that your registrar didn't accidentally append your domain twice.\n\nOnce updated, DNS propagation typically takes 15–30 minutes. Let us know and we will run another delivery trace for you!",
+      "keywords": [
+        "spf",
+        "dkim",
+        "dmarc",
+        "email",
+        "spam",
+        "deliverability",
+        "dns",
+        "gmail",
+        "yahoo"
+      ],
+      "tags": [
+        "email",
+        "dns",
+        "deliverability"
+      ],
+      "targetAudience": "public_and_agents",
+      "author": "Liam O’Connor (Postmaster & Deliverability)",
+      "reviewStatus": "needs_review",
+      "lastReviewedAt": "2026-05-10T14:00:00Z",
+      "viewsCount": 890,
+      "helpfulCount": 22,
+      "notHelpfulCount": 16,
+      "outdatedReportsCount": 4,
+      "createdAt": "2026-01-20T09:00:00Z",
+      "updatedAt": "2026-05-10T14:00:00Z",
+      "helpfulRatio": 0.58,
+      "healthScore": 0,
+      "updateUrgency": "urgent",
+      "urgencyReasons": [
+        "Low helpfulness rating (58%) based on 38 reviews",
+        "4 support agents flagged outdated UI steps or commands",
+        "Not reviewed for 179 days (policy threshold: 90 days)"
+      ]
+    },
+    {
+      "id": "art-gdpr-erasure-workflow",
+      "title": "GDPR Article 17 \"Right to Erasure\" Data Export & Permanent Deletion Workflow",
+      "slug": "gdpr-article-17-right-to-erasure-workflow",
+      "summary": "Standard Operating Procedure (SOP) for processing statutory data deletion requests within the 30-day window, handling financial audit exemptions.",
+      "categoryId": "cat-compliance",
+      "categoryName": "Compliance & Privacy",
+      "content": "Under GDPR Article 17 and CCPA Section 1798.105, data subjects have the right to request erasure of personal data. However, statutory financial and fraud record-retention laws (e.g. tax records, paid invoice logs) take precedence over general erasure for a mandatory 7-year retention period.\n\n### SLA & Process\n- Statutory Deadline: 30 calendar days from receipt of verified request.\n- Automated Anonymization replaces names, emails, phone numbers, and IP addresses with cryptographic salt hashes (`anon_839f2a01@privacy.internal`).",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Validate Requester Authorization",
+          "instructions": "Confirm request came from the verified primary email address or authorized legal representative with power of attorney."
+        },
+        {
+          "stepNumber": 2,
+          "title": "Generate Full Data Archive Export (Article 15)",
+          "instructions": "In Compliance Center > Privacy Requests > New Erasure, click \"Generate Portable JSON/ZIP Archive\" and send the download link to the user before purging."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Execute Permanent Anonymization Job",
+          "instructions": "Trigger the anonymization worker. All ticket comments, attachment storage buckets, and user session histories will be purged. Financial invoices retain only non-PII transactional totals."
+        }
+      ],
+      "quickSnippet": "Dear {{ticket.requester.first_name}},\n\nWe have processed your request for permanent erasure of your personal data under GDPR Article 17 / CCPA.\n\nSummary of actions taken:\n- All personal identifiers, profile information, and support conversations have been permanently deleted from our active databases and backup queues.\n- As required by international tax and corporate accounting regulations, historical payment receipts and invoice transaction IDs are retained in an anonymized format for the statutory 7-year audit requirement.\n\nA confirmation certificate (ID: PRIV-{{request.id}}) has been archived for our Data Protection Officer.",
+      "keywords": [
+        "gdpr",
+        "privacy",
+        "erasure",
+        "delete account",
+        "ccpa",
+        "anonymization",
+        "compliance",
+        "right to be forgotten"
+      ],
+      "tags": [
+        "compliance",
+        "legal",
+        "gdpr",
+        "privacy"
+      ],
+      "targetAudience": "agents_only",
+      "author": "Clara Johansson (Data Protection Officer)",
+      "reviewStatus": "verified",
+      "lastReviewedAt": "2026-10-10T16:00:00Z",
+      "viewsCount": 310,
+      "helpfulCount": 28,
+      "notHelpfulCount": 1,
+      "outdatedReportsCount": 0,
+      "createdAt": "2026-03-15T13:00:00Z",
+      "updatedAt": "2026-10-10T16:00:00Z",
+      "helpfulRatio": 0.97,
+      "healthScore": 100,
+      "updateUrgency": "healthy",
+      "urgencyReasons": []
+    },
+    {
+      "id": "art-slack-app-oauth-mismatch",
+      "title": "Fixing Slack Integration \"invalid_auth\" and \"scope_mismatch\" Errors After Workspace Re-branding",
+      "slug": "fixing-slack-integration-invalid-auth-scope-mismatch",
+      "summary": "Resolution steps when ticket notifications to Slack channels abruptly stop due to team domain migration or newly required granular scopes.",
+      "categoryId": "cat-integrations",
+      "categoryName": "Integrations & Webhooks",
+      "content": "When a customer company changes its Slack team URL (e.g. from `oldbrand.slack.com` to `newbrand.slack.com`) or when Slack deprecates legacy bot permissions, the cached Bot User OAuth Token becomes invalid.\n\nSymptoms: Helpdesk displays \"Slack Connected\", but alerts fail with error `Slack API error: invalid_auth` or `missing_scope: chat:write.public`.",
+      "resolutionSteps": [
+        {
+          "stepNumber": 1,
+          "title": "Check Slack App Event Subscriptions",
+          "instructions": "Open your Slack App Management portal > Event Subscriptions. Verify the Request URL matches our secure webhook ingest endpoint."
+        },
+        {
+          "stepNumber": 2,
+          "title": "Perform Single-Click OAuth Reconnection",
+          "instructions": "In Helpdesk Settings > Integrations > Slack, do not just toggle the switch off and on. Click \"Disconnect & Re-authenticate\". This triggers a fresh OAuth v2 grant with current scopes: `chat:write`, `channels:read`, `users:read.email`."
+        },
+        {
+          "stepNumber": 3,
+          "title": "Re-invite Bot to Private Channels",
+          "instructions": "If tickets are posted to private channels, run `/invite @HelpdeskBot` in that private channel. Bots cannot post to private channels without explicit membership."
+        }
+      ],
+      "quickSnippet": "Hi {{ticket.requester.first_name}},\n\nThis occurs when Slack's authorization token expires or misses updated bot permissions after a workspace domain change.\n\nTo resolve in under 2 minutes:\n1. Go to Helpdesk Settings > Integrations > Slack.\n2. Click \"Disconnect Integration\", then click \"Add to Slack\" to re-authorize with our latest OAuth v2 permissions.\n3. For any private channels where you receive notifications, make sure to type `/invite @HelpdeskBot` inside the channel so Slack grants it posting access.\n\nSend a test notification from the settings panel to confirm everything is flowing!",
+      "keywords": [
+        "slack",
+        "invalid_auth",
+        "scope_mismatch",
+        "chat:write",
+        "integration",
+        "oauth",
+        "bot"
+      ],
+      "tags": [
+        "slack",
+        "integrations",
+        "troubleshooting"
+      ],
+      "targetAudience": "public_and_agents",
+      "author": "Marcus Vance (API Reliability)",
+      "reviewStatus": "outdated",
+      "lastReviewedAt": "2026-04-01T09:00:00Z",
+      "viewsCount": 940,
+      "helpfulCount": 31,
+      "notHelpfulCount": 29,
+      "outdatedReportsCount": 6,
+      "createdAt": "2025-11-10T10:00:00Z",
+      "updatedAt": "2026-04-01T09:00:00Z",
+      "helpfulRatio": 0.52,
+      "healthScore": 0,
+      "updateUrgency": "urgent",
+      "urgencyReasons": [
+        "Low helpfulness rating (52%) based on 60 reviews",
+        "6 support agents flagged outdated UI steps or commands",
+        "Not reviewed for 219 days (policy threshold: 90 days)",
+        "Explicitly marked as Outdated"
+      ]
+    }
+  ],
+  "categories": [
+    {
+      "id": "cat-security",
+      "name": "Security & Access",
+      "slug": "security-access",
+      "description": "SAML 2.0, SSO, 2FA recovery, RBAC permissions, and API tokens.",
+      "icon": "ShieldCheck",
+      "color": "#4f46e5",
+      "displayOrder": 1
+    },
+    {
+      "id": "cat-integrations",
+      "name": "Integrations & Webhooks",
+      "slug": "integrations-webhooks",
+      "description": "Webhook delivery, Slack bot sync, Zapier, and third-party app connectors.",
+      "icon": "Boxes",
+      "color": "#0891b2",
+      "displayOrder": 2
+    },
+    {
+      "id": "cat-billing",
+      "name": "Billing & Subscriptions",
+      "slug": "billing-subscriptions",
+      "description": "Invoice disputes, pro-rated seat upgrades, Stripe credits, and refund policies.",
+      "icon": "CreditCard",
+      "color": "#059669",
+      "displayOrder": 3
+    },
+    {
+      "id": "cat-api",
+      "name": "Developer API & SDKs",
+      "slug": "developer-api",
+      "description": "REST API 429 rate limits, pagination, SDK auth, and batching.",
+      "icon": "Terminal",
+      "color": "#d97706",
+      "displayOrder": 4
+    },
+    {
+      "id": "cat-deliverability",
+      "name": "Email & Deliverability",
+      "slug": "email-deliverability",
+      "description": "SPF/DKIM/DMARC DNS configuration, transactional email spam mitigation.",
+      "icon": "MailCheck",
+      "color": "#7c3aed",
+      "displayOrder": 5
+    },
+    {
+      "id": "cat-compliance",
+      "name": "Compliance & Privacy",
+      "slug": "compliance-privacy",
+      "description": "GDPR Right to Erasure, CCPA export, audit logs, and SOC2 compliance.",
+      "icon": "FileLock2",
+      "color": "#db2777",
+      "displayOrder": 6
+    }
+  ],
+  "feedback": [
+    {
+      "id": "fb-1793956999342-455",
+      "articleId": "art-saml-sso-certs",
+      "isHelpful": false,
+      "reason": "outdated_steps",
+      "userRole": "support_agent",
+      "comments": "Azure AD UI renamed Enterprise Applications to Microsoft Entra ID.",
+      "createdAt": "2026-11-06T09:23:19.342Z"
+    },
+    {
+      "id": "fb-101",
+      "articleId": "art-webhook-timeouts-dlq",
+      "isHelpful": false,
+      "reason": "outdated_steps",
+      "userRole": "support_agent",
+      "comments": "Step 2 code snippet uses obsolete BullMQ 3.x syntax. In v5 the connection parameter is mandatory. Customers are getting unhandled promise rejections.",
+      "suggestedCorrection": "Update redis connection initialization to modern Redis client format.",
+      "createdAt": "2026-11-01T14:22:00Z"
+    },
+    {
+      "id": "fb-102",
+      "articleId": "art-webhook-timeouts-dlq",
+      "isHelpful": false,
+      "reason": "incorrect_info",
+      "userRole": "support_agent",
+      "comments": "The retry interval mentioned is 5 seconds, but our delivery engine was upgraded last month to use 15s exponential backoff with jitter.",
+      "suggestedCorrection": "Specify 15s initial backoff instead of 5s.",
+      "createdAt": "2026-11-03T09:15:00Z"
+    },
+    {
+      "id": "fb-103",
+      "articleId": "art-email-spf-dkim-dmarc",
+      "isHelpful": false,
+      "reason": "outdated_steps",
+      "userRole": "support_agent",
+      "comments": "The selector in the quick snippet says helpdesk._domainkey, but our DNS setup now provisions k1._domainkey by default for 2048-bit keys.",
+      "suggestedCorrection": "Change selector example to k1._domainkey or mention both.",
+      "createdAt": "2026-11-04T16:40:00Z"
+    },
+    {
+      "id": "fb-104",
+      "articleId": "art-slack-app-oauth-mismatch",
+      "isHelpful": false,
+      "reason": "outdated_steps",
+      "userRole": "support_agent",
+      "comments": "UI in Slack App directory moved \"OAuth & Permissions\" to the Left Nav sidebar under Features. The article still refers to the old top tabs.",
+      "suggestedCorrection": "Update navigation breadcrumb to Slack API > Settings > Install App.",
+      "createdAt": "2026-11-05T11:05:00Z"
+    },
+    {
+      "id": "fb-105",
+      "articleId": "art-saml-sso-certs",
+      "isHelpful": true,
+      "reason": "worked_great",
+      "userRole": "support_agent",
+      "comments": "Quick snippet solved an Okta migration ticket in 3 minutes! Customer was super impressed.",
+      "createdAt": "2026-11-05T15:30:00Z"
+    }
+  ],
+  "reviews": []
+}
